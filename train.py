@@ -5,8 +5,6 @@ import numpy as np
 from tqdm import tqdm
 
 from defaults import get_cfg_defaults
-from dataset import Lung250MDataset, KittiDataset
-from ppwc import Topo9_PointPWC, multiScaleLoss, topo_pyramid_loss
 
 
 def train(cfg, args):
@@ -28,7 +26,7 @@ def train(cfg, args):
     # computational stuff
     use_amp = cfg.USE_AMP
     num_workers = 0 if args.debug else cfg.NUM_WORKERS
-    device = cfg.DEVICE
+    device = torch.device('cuda:0' if cfg.DEVICE.startswith('cuda') else cfg.DEVICE)
 
     # model: Topo9 (Original Topo + L4-only topology coupling)
     print("Using Topo9 (Original Topo + L4-only sparse residual topology coupling)")
@@ -167,7 +165,12 @@ if __name__ == "__main__":
     parser.add_argument('--config', default='config_ppwc_sup.yaml',
                         help="config file of the model (yaml)")
     parser.add_argument("--debug", default=False, help="whether to use debug mode", type=bool)
-    parser.add_argument("--gpu", default="0", help="gpu to train on")
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        default=0,
+        help="physical GPU index to expose to this process",
+    )
     parser.add_argument('-CTr', '--cloudfolder_train', default='../cloudsTr/coordinates',
                         help="folder containing (/case_???_{1,2}.pth)")
     parser.add_argument('-CVal', '--cloudfolder_val', default='../cloudsTs/coordinates',
@@ -183,14 +186,35 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    import torch
-    import torch.optim as optim
-    from torch.utils.data import DataLoader
+    if args.gpu < 0:
+        parser.error('--gpu must be a non-negative physical GPU index')
 
     cfg = get_cfg_defaults()
     cfg.merge_from_file(args.config)
     cfg.freeze()
+
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+
+    # Select the physical GPU before importing Torch-dependent project modules.
+    # CUDA remaps the selected physical device to logical cuda:0 in this process.
+    import torch
+
+    if cfg.DEVICE.startswith('cuda'):
+        if not torch.cuda.is_available():
+            parser.error(
+                f'physical GPU {args.gpu} is unavailable; '
+                'check --gpu, the NVIDIA driver, and CUDA_VISIBLE_DEVICES'
+            )
+        torch.cuda.set_device(0)
+        print(
+            f'GPU selection: physical GPU {args.gpu} -> logical cuda:0 '
+            f'({torch.cuda.get_device_name(0)})'
+        )
+
+    import torch.optim as optim
+    from torch.utils.data import DataLoader
+    from dataset import Lung250MDataset, KittiDataset
+    from ppwc import Topo9_PointPWC, multiScaleLoss, topo_pyramid_loss
 
     train(cfg, args)

@@ -5,11 +5,6 @@ import glob
 from tqdm import tqdm
 
 from defaults import get_cfg_defaults
-from ppwc import Topo9_PointPWC
-try:
-    from topology import compute_topo_features
-except ImportError:
-    compute_topo_features = None
 
 
 def main(args):
@@ -19,7 +14,7 @@ def main(args):
 
     # computational stuff
     use_amp = cfg.USE_AMP
-    device = 'cuda'
+    device = torch.device('cuda:0')
 
     # model: Topo9
     print("Using Topo9 (Original Topo + L4-only sparse residual topology coupling)")
@@ -173,7 +168,12 @@ if __name__ == "__main__":
                         help="output file for keypoint displacement predictions")
     parser.add_argument('--config', default='config_ppwc_sup.yaml',
                         help="config file of the model (yaml)")
-    parser.add_argument("--gpu", default="0", help="gpu to train on")
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        default=0,
+        help="physical GPU index to expose to this process",
+    )
     parser.add_argument('--dataset', default='lung', choices=['lung', 'kitti'],
                         help='dataset to use')
     parser.add_argument('--kitti_root', default='../mmdetection3d/data/kitti/testing/velodyne',
@@ -181,9 +181,32 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    if args.gpu < 0:
+        parser.error('--gpu must be a non-negative physical GPU index')
+
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+
+    # Select the physical GPU before importing Torch-dependent project modules.
+    # CUDA remaps the selected physical device to logical cuda:0 in this process.
     import torch
+
+    if not torch.cuda.is_available():
+        parser.error(
+            f'physical GPU {args.gpu} is unavailable; '
+            'check --gpu, the NVIDIA driver, and CUDA_VISIBLE_DEVICES'
+        )
+    torch.cuda.set_device(0)
+    print(
+        f'GPU selection: physical GPU {args.gpu} -> logical cuda:0 '
+        f'({torch.cuda.get_device_name(0)})'
+    )
+
+    from ppwc import Topo9_PointPWC
+    try:
+        from topology import compute_topo_features
+    except ImportError:
+        compute_topo_features = None
 
     print(args)
     main(args)
